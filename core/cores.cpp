@@ -74,6 +74,3 @@ bool find_core_for_board(std::string &fname, const char *core_name) {
     }
     return false;
 }
-
-// Forward declare neogeo core
-extern const core_t neogeo_core;
