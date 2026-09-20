@@ -41,6 +41,10 @@ void init_core_list() {
         {4, "MegaDrive / Genesis", "genesis", "mdtang.bin", loadmd, create_default_menu},
         {5, "Sega Master System", "sms", "smstang.bin", loadsms, create_default_menu},
         {6, "IBM PC/XT", "pc", "pctang.bin", loadpc, create_pcxt_menu},
+        // Neo Geo (arcade) -- TerraOnion .neo format, MVS BIOS (SPROM/LO/SFIX/SM1)
+        // loaded from neogeo/ ahead of the game. CORE_ID 7 (matches the NeoTang
+        // FPGA iosys .CORE_ID(7)); free between PC/XT(6) and PC Engine(8).
+        {7, "Neo Geo", "neogeo", "neotang.bin", loadneogeo, create_default_menu},
         // Real (2026-09-01): PC Engine and PC Engine CD unified into one entry --
         // one real bitstream (pcetang.bin, cd_bridge.vhd's SCSI target is baked into
         // every CD combo build regardless of what's loaded), one CORE_ID (0x0008,
@@ -59,6 +63,10 @@ void init_core_list() {
     main_menu_config = {1,2,
 #if defined(TANG_MEGA60K) || defined(TANG_MEGA138K) || defined(TANG_CONSOLE60K) || defined(TANG_CONSOLE138K)
         3,4,5,6,
+#endif
+#if defined(TANG_CONSOLE60K)
+        // Neo Geo (NeoTang) -- 60K-only until built/verified on the other boards.
+        7,
 #endif
 #if defined(TANG_PRIMER25K) || defined(TANG_CONSOLE60K) || defined(TANG_NANO20K)
         // pcetang: gw_sh-verified on these boards (see pcetang project
