@@ -2,6 +2,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>   // neo_log(): vsnprintf into the SD log
 #include <string>
 
 #include "tc_utils.h"
@@ -53,7 +54,15 @@ static int neo_stream_region(FIL *file, uint8_t region_id, uint32_t size, const 
     overlay_status("Loading %s (%dK)...", name, size >> 10);
 
     taskENTER_CRITICAL();
-    fpga_tx_header(0x11, 5);                 // Neo Geo region header (see iosys_bl616.v)
+    // len COUNTS THE COMMAND BYTE: 5 payload bytes need len 6. iosys_bl616 ends a frame
+    // when data_cnt + 2 == len, so len=5 ended it after the FOURTH payload byte -- and
+    // rom_region_valid, which only pulses on the fifth, never fired at all. Without that
+    // pulse rom_stream_pack never starts a region and DISCARDS EVERY ROM BYTE: the load
+    // looked fine here, the FPGA wrote nothing to SDRAM, and every game booted to a black
+    // screen (confirmed on hardware by an RTL probe: zero DL writes for a whole load).
+    // Every other command in this firmware already counts the cmd byte -- 0x0f sends 5
+    // payload bytes as len 6, 0x09 sends 4 as len 5.
+    fpga_tx_header(0x11, 6);                 // Neo Geo region header (see iosys_bl616.v)
     fpga_tx_byte(region_id);
     fpga_tx_byte(size & 0xFF);
     fpga_tx_byte((size >> 8) & 0xFF);
@@ -288,7 +297,7 @@ static bool neo_cfg_override(const char *fname, uint32_t ngh, uint32_t *cfg) {
 // Bit 15 of the first word selects config mode (cp_op = 0) rather than a memory copy.
 static int neo_send_cfg(uint32_t cfg) {
     taskENTER_CRITICAL();
-    fpga_tx_header(0x11, 5);
+    fpga_tx_header(0x11, 6);                 // len counts the cmd byte, see neo_stream_region
     fpga_tx_byte(10);
     fpga_tx_byte(6); fpga_tx_byte(0); fpga_tx_byte(0); fpga_tx_byte(0);
     taskEXIT_CRITICAL();
@@ -301,9 +310,24 @@ static int neo_send_cfg(uint32_t cfg) {
 }
 
 // return 0 if successful
+// TEMP diagnostic, defined in main.cpp: dprint() goes out over the FPGA UART for a host
+// capture tool, so nothing from this loader reached the SD card's debug.log -- which is the
+// only trace available when the core shows a black screen. file_log() writes there.
+extern void file_log(const char *msg);
+
+static void neo_log(const char *fmt, ...) {
+    char buf[128];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    file_log(buf);
+}
+
 int loadneogeo(const char *fname) {
     int r = 1;
     DEBUG("loadneogeo start");
+    neo_log("neogeo: loadneogeo %s", fname);
 
     // check extension .neo
     char *p = strcasestr(fname, ".neo");
@@ -390,6 +414,11 @@ int loadneogeo(const char *fname) {
     // Enable loading on FPGA
     set_loading_state(1);
     core_running = false;
+    neo_log("neogeo: NGH %03lX cfg %08lX P=%luK S=%luK M=%luK V1=%luK V2=%luK C=%luK",
+            (unsigned long)ngh, (unsigned long)cart_cfg, (unsigned long)(p_size >> 10),
+            (unsigned long)(s_size >> 10), (unsigned long)(m_size >> 10),
+            (unsigned long)(v1_size >> 10), (unsigned long)(v2_size >> 10),
+            (unsigned long)(c_size >> 10));
 
     // The config words go first: they select the cart's bank/protection hardware for the
     // whole session (and keep cd_en clear, i.e. arcade rather than Neo Geo CD).
@@ -422,17 +451,22 @@ int loadneogeo(const char *fname) {
         if (regions[i].size == 0) continue;
         if (neo_stream_region(&fcore, regions[i].region_id, regions[i].size, regions[i].name)) {
             overlay_status("Read failure in %s", regions[i].name);
+            neo_log("neogeo: READ FAILURE in %s", regions[i].name);
             goto loadneogeo_end;
         }
         total_bytes += regions[i].size;
+        neo_log("neogeo: sent %s %luK (total %luK)", regions[i].name,
+                (unsigned long)(regions[i].size >> 10), (unsigned long)(total_bytes >> 10));
     }
 
+    neo_log("neogeo: ALL REGIONS SENT, %luK total", (unsigned long)(total_bytes >> 10));
     overlay_status("Success! %dK loaded", total_bytes >> 10);
     core_running = true;
     delay(200);
     overlay(0);  // turn off OSD
 
 loadneogeo_end:
+    neo_log("neogeo: loading_state off, r=%d", r);
     set_loading_state(0);  // turn off loading, this starts core
 loadneogeo_close:
     f_close(&fcore);
