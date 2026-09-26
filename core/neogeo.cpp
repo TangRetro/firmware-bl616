@@ -472,3 +472,81 @@ loadneogeo_close:
     f_close(&fcore);
     return r;
 }
+
+// ---------------------------------------------------------------------------------------
+// Neo Geo CD (NeoTang CD bitstream, CORE_ID 9). The disc is a .chd, served by the same CD
+// transport as the PC Engine CD (pcecd.cpp: 0x0f TOC, 0x0e mount, 0x06 request -> 0x10
+// chunks); the FPGA's neocd_bridge turns it into the CD drive. Here: pick the BIOS, set the
+// machine type, load the BIOS regions and start the core -- cdchd_load() then announces the
+// disc.
+//
+// The BIOS picks the machine, and the machine the drive speed: the front- and top-loaders
+// have a 1x drive and their BIOS cannot keep up with a faster one; the CDZ has 2x. Searched
+// in neogeocd/ then neogeo/, MAME names: front-sp1.bin (front loader), top-sp1.bin (top
+// loader), neocd.bin (CDZ), plus 000-lo.lo.
+#include "pcecd.h"
+
+#define NEOCD_CFG_CDZ        (1u << 2)            // status[2]: CD type, 0 = CD, 1 = CDZ
+#define NEOCD_CFG_SPEED(n)   ((uint32_t)(n) << 29) // status[30:29]: 0 = 1x, 1 = 2x
+#define NEOCD_CFG_MASK       (NEOCD_CFG_CDZ | NEOCD_CFG_SPEED(3))
+
+static bool neo_file_exists(const std::string &sub) {
+    FILINFO fno;
+    return f_stat((std::string(drv) + sub).c_str(), &fno) == FR_OK;
+}
+
+// "neogeocd/<name>" if present, else "neogeo/<name>", else empty.
+static std::string neocd_find(const char *name) {
+    std::string a = std::string("neogeocd/") + name, b = std::string("neogeo/") + name;
+    if (neo_file_exists(a)) return a;
+    if (neo_file_exists(b)) return b;
+    return "";
+}
+
+static int neocd_boot(void) {
+    static const struct { const char *file; bool cdz; const char *what; } bioses[] = {
+        { "front-sp1.bin", false, "front loader" },
+        { "top-sp1.bin",   false, "top loader"   },
+        { "neocd.bin",     true,  "CDZ"          },
+    };
+    std::string bios, lo;
+    bool cdz = false;
+    const char *what = NULL;
+    for (auto &b : bioses) {
+        bios = neocd_find(b.file);
+        if (!bios.empty()) { cdz = b.cdz; what = b.what; break; }
+    }
+    if (bios.empty()) {
+        overlay_status("No Neo Geo CD BIOS (front-sp1.bin, top-sp1.bin or neocd.bin)");
+        neo_log("neogeocd: no BIOS found");
+        return 1;
+    }
+    lo = neocd_find("000-lo.lo");
+    if (lo.empty()) {
+        overlay_status("Missing 000-lo.lo");
+        neo_log("neogeocd: no 000-lo.lo");
+        return 1;
+    }
+    neo_log("neogeocd: BIOS %s (%s), %s", bios.c_str(), what, lo.c_str());
+
+    set_core_config((get_core_config() & ~NEOCD_CFG_MASK) |
+                    (cdz ? (NEOCD_CFG_CDZ | NEOCD_CFG_SPEED(1)) : NEOCD_CFG_SPEED(0)));
+
+    set_loading_state(1);
+    core_running = false;
+    neo_send_cfg(0);                      // no cart hardware in the CD build
+    int r = neo_load_bios(bios.c_str(), NEO_REG_SPROM, "SPROM (CD BIOS)", 1);
+    if (!r) r = neo_load_bios(lo.c_str(), NEO_REG_LO, "LO", 1);
+    neo_log("neogeocd: BIOS load r=%d, starting core", r);
+    set_loading_state(0);                 // starts the core
+    if (r) return r;
+    core_running = true;
+    delay(200);
+    overlay(0);
+    return 0;
+}
+
+int loadneogeocd(const char *fname) {
+    neo_log("neogeocd: loadneogeocd %s", fname);
+    return cdchd_load(fname, neocd_boot);
+}

@@ -936,7 +936,32 @@ static bool pcecd_read_toc(void) {
 // SCSI target (already real, gw_sh-verified) starts answering real disc requests. Loads
 // syscard3.pce through the same real 0x07 rom_do path loadpce() already uses for a plain
 // HuCard.
+// The PC Engine CD's system card, run before the disc is announced.
+static int pcecd_boot_syscard(void) {
+    int r;
+    std::string syscard = std::string(drv) + "bios/syscard3.pce";
+    FILINFO fno;
+    FRESULT sres = f_stat(syscard.c_str(), &fno);
+    char buf[128];
+    snprintf(buf, sizeof(buf), "loadpcecd: syscard=%s res=%d sz=%lu", syscard.c_str(), (int)sres,
+        sres == FR_OK ? (unsigned long)fno.fsize : 0UL);
+    file_log(buf);
+    r = loadpce(syscard.c_str());
+    snprintf(buf, sizeof(buf), "loadpcecd: loadpce(syscard) returned %d", r);
+    file_log(buf);
+    if (r != 0) overlay_status("Failed to load syscard3.pce");
+    return r;
+}
+
 int loadpcecd(const char *fname) {
+    return cdchd_load(fname, pcecd_boot_syscard);
+}
+
+// Mount a .chd and serve it over the shared CD transport (0x0f TOC, 0x0e mount, 0x06
+// requests answered with 0x10 chunks): open, read the TOC, run the system's `boot` (load the
+// BIOS/system card and start the core), then send the TOC and the mount. Used by the PC Engine
+// CD and the Neo Geo CD, whose FPGA sides speak the same protocol.
+int cdchd_load(const char *fname, int (*boot)(void)) {
     int r = 1;
     DEBUG("loadpcecd start: %s\n", fname);
     file_log("loadpcecd: start");
@@ -997,22 +1022,10 @@ int loadpcecd(const char *fname) {
     }
     file_log("loadpcecd: TOC read ok");
 
-    {
-        std::string syscard = std::string(drv) + "bios/syscard3.pce";
-        FILINFO fno;
-        FRESULT sres = f_stat(syscard.c_str(), &fno);
-        char buf[128];
-        snprintf(buf, sizeof(buf), "loadpcecd: syscard=%s res=%d sz=%lu", syscard.c_str(), (int)sres,
-            sres == FR_OK ? (unsigned long)fno.fsize : 0UL);
-        file_log(buf);
-        r = loadpce(syscard.c_str());
-        snprintf(buf, sizeof(buf), "loadpcecd: loadpce(syscard) returned %d", r);
-        file_log(buf);
-        if (r != 0) {
-            overlay_status("Failed to load syscard3.pce");
-            pcecd_unload();
-            goto loadpcecd_end;
-        }
+    r = boot();
+    if (r != 0) {
+        pcecd_unload();
+        goto loadpcecd_end;
     }
 
     // Real TOC send, BEFORE mount -- cd_bridge.vhd's own TOC_CAPTURE process (see its

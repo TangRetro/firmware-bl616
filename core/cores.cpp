@@ -57,7 +57,9 @@ void init_core_list() {
         // matching in menu_loadrom() short-circuits on .pce/.chd before the generic
         // rom_dir-prefix loop, see pcetang_cd_scsi_plan.md for the protocol this
         // shares with the CD path.
-        {8, "PC Engine", "pce", "pcetang.bin", loadpce_dispatch, create_default_menu}
+        {8, "PC Engine", "pce", "pcetang.bin", loadpce_dispatch, create_default_menu},
+        // Neo Geo CD -- the NeoTang CD bitstream (CD=1 build, CORE_ID 9), .chd discs.
+        {9, "Neo Geo CD", "neogeocd", "neotang_cd.bin", loadneogeocd, create_default_menu}
     };
 
     main_menu_config = {1,2,
@@ -66,7 +68,7 @@ void init_core_list() {
 #endif
 #if defined(TANG_CONSOLE60K)
         // Neo Geo (NeoTang) -- 60K-only until built/verified on the other boards.
-        7,
+        7, 9,
 #endif
 #if defined(TANG_PRIMER25K) || defined(TANG_CONSOLE60K) || defined(TANG_NANO20K)
         // pcetang: gw_sh-verified on these boards (see pcetang project

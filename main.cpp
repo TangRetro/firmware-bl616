@@ -267,7 +267,13 @@ static int menu_loadrom(const char *dir) {
     // PC Engine's unified entry (id 8) owns both .pce (pce/) and .chd (pcenginecd/) --
     // extension is the real discriminator, checked first so a .chd under pcenginecd/
     // doesn't need to match a rom_dir prefix that entry no longer solely owns.
-    if (strcasestr(path.c_str(), ".pce") || strcasestr(path.c_str(), ".chd") ||
+    // Neo Geo CD discs are .chd too: anything under neogeocd/ belongs to the Neo Geo CD
+    // entry (id 9, its own bitstream), checked before PC Engine claims every .chd.
+    if (path.find("neogeocd/") == 0) {
+        core = find_core_by_id(9);
+        file_log("menu_loadrom: neogeocd/ path -> Neo Geo CD");
+    }
+    else if (strcasestr(path.c_str(), ".pce") || strcasestr(path.c_str(), ".chd") ||
         strcasestr(path.c_str(), ".sgx")) {
         core = find_core_by_id(8);
         char buf[160];

@@ -31,6 +31,7 @@ extern int loadpce(const char *fname);
 extern int loadpcecd(const char *fname);
 extern int loadpce_dispatch(const char *fname);   // .pce -> loadpce, .chd -> loadpcecd
 extern int loadneogeo(const char *fname);          // Neo Geo .neo (TerraOnion) + BIOS
+extern int loadneogeocd(const char *fname);        // Neo Geo CD .chd + CD BIOS
 
 extern bool find_core_for_board(std::string &fname, const char *core_name);
 

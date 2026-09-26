@@ -5,6 +5,8 @@
 // chunk/0x06 sector request), verified against 3 real .chd dumps before this was written.
 
 extern int loadpcecd(const char *fname);
+// Generic: mount `fname`, run `boot` (BIOS load + core start; 0 = ok), then send TOC + mount.
+extern int cdchd_load(const char *fname, int (*boot)(void));
 // Real, idempotent disc-eject: safe to call with nothing mounted, but always sends a
 // mount(0) frame to the FPGA -- fine for its 3 existing callers (all run once the
 // active core is already the CD core and listening), NOT fine to call blind right
