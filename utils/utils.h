@@ -147,5 +147,12 @@ extern bool fpga_tx_lock_timed(uint32_t ms);
 extern void fpga_tx_unlock(void);
 extern void fpga_tx_unlock_from_isr(void);
 extern volatile uint32_t fpga_tx_lock_timeouts;
+#define CORE_CONF_MAX 255
+extern char core_conf_str[CORE_CONF_MAX + 1];
+extern volatile int16_t core_conf_len;
+#ifdef __cplusplus
+#include <string>
+extern bool get_core_conf_string(std::string &out);
+#endif
 
 extern const char *cstr_find_ignore_case(const char *str, const char *substr);
