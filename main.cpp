@@ -175,6 +175,7 @@ static volatile uint32_t log_drops = 0;
 static uint32_t log_drops_seen = 0;
 
 static void file_log_sync(const char *msg);
+static void fpga_link_baud_for(const char *bitstream);   // defined below menu_loadrom
 
 void file_log(const char *msg) {
     // Live copy first, on the caller's task: works before any drive is mounted and
@@ -259,6 +260,7 @@ static int menu_loadrom(const char *dir) {
     if (fname.find(string(drv) + "cores") == 0) {
         overlay_status("Core: %s", fname.c_str());
         fpga_program(fname.c_str());
+        fpga_link_baud_for(fname.c_str());
         _overlay_on = 1;                // turn on overlay after core is loaded
         return 0;       // return to main menu
     } 
@@ -319,6 +321,7 @@ static int menu_loadrom(const char *dir) {
                     file_log(buf);
                 }
                 bool prog_ok = fpga_program(fname_core.c_str());
+                fpga_link_baud_for(fname_core.c_str());
                 overlay_cursor(0, 11);
                 overlay_printf("DBG fpga_program=%d          ", prog_ok ? 1 : 0);
                 {
@@ -373,6 +376,22 @@ static int menu_loadrom(const char *dir) {
 
 static void menu_options(void) {
     // to be implemented
+}
+
+// FPGA link rate for the bitstream just programmed. Every core's iosys runs 2 Mbaud except
+// NeoTang's Neo Geo CD build (neotang_cd*.bin), which runs 4 Mbaud: CD audio needs the headroom
+// (NeoTang docs/NEOCD.md). Switched here, right after programming and before anything is sent,
+// so no other core is affected. Same crystal correction as uart1's setup in utils/init.cpp.
+static void fpga_link_baud_for(const char *bitstream) {
+    const char *base = strrchr(bitstream, '/');
+    base = base ? base + 1 : bitstream;
+    uint32_t baud = (strncmp(base, "neotang_cd", 10) == 0) ? 4000000 : 2000000;
+#if !(defined(TANG_CONSOLE60K) || defined(TANG_CONSOLE138K))
+    baud = baud * 40 / 26;                  // 26 MHz XTAL boards
+#endif
+    bflb_uart_feature_control(uart1_dev, UART_CMD_SET_BAUD_RATE, baud);
+    char b[96]; snprintf(b, sizeof b, "fpga link: %lu baud for %s", (unsigned long)baud, base);
+    file_log(b);
 }
 
 // keep sending HID state to core until OSD is turned on
@@ -865,6 +884,7 @@ static void main_task(void *pvParameters)
     if (find_core_for_board(fname, "monitor.bin")) {
         uart_dbg("BOOT: monitor.bin found, calling fpga_program");
         bool ok = fpga_program(fname.c_str());
+        fpga_link_baud_for(fname.c_str());
         uart_dbg(ok ? "BOOT: fpga_program returned OK" : "BOOT: fpga_program returned FAIL");
     } else {
         overlay_status("No monitor.bin found for board.");
