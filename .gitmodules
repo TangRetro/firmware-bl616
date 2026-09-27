@@ -1,0 +1,5 @@
+# FLAC backend for libchdr on MCU targets (-DCHDR_FLAC_BACKEND_MICROFLAC). Pinned:
+# the backend compiles against micro-flac's internals.
+[submodule "thirdparty/micro-flac"]
+	path = thirdparty/micro-flac
+	url = https://github.com/esphome-libs/micro-flac.git
