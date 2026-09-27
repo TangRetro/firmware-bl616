@@ -13,6 +13,7 @@
 #include "tc_utils.h"
 #include "cores.h"
 #include "overlay.h"
+#include "neosave.h"
 
 // Neo Geo .neo (TerraOnion) file format:
 // 0x000  'N' 'E' 'O' 0x01
@@ -465,6 +466,9 @@ int loadneogeo(const char *fname) {
     }
 
     neo_log("neogeo: ALL REGIONS SENT, %luK total", (unsigned long)(total_bytes >> 10));
+    // Backup SRAM + memory card from saves/neogeo/<game>.sav, before the core starts.
+    neosave_set_game(fname, false);
+    neosave_restore();
     overlay_status("Success! %dK loaded", total_bytes >> 10);
     core_running = true;
     delay(200);
@@ -508,6 +512,8 @@ static std::string neocd_find(const char *name) {
     return "";
 }
 
+static const char *neocd_fname = NULL;   // the disc being loaded (names the save file)
+
 static int neocd_boot(void) {
     static const struct { const char *file; bool cdz; const char *what; } bioses[] = {
         { "front-sp1.bin", false, "front loader" },
@@ -542,6 +548,10 @@ static int neocd_boot(void) {
     neo_send_cfg(0);                      // no cart hardware in the CD build
     int r = neo_load_bios(bios.c_str(), NEO_REG_SPROM, "SPROM (CD BIOS)", 1);
     if (!r) r = neo_load_bios(lo.c_str(), NEO_REG_LO, "LO", 1);
+    if (!r && neocd_fname) {            // memory card from saves/neogeocd/<disc>.sav
+        neosave_set_game(neocd_fname, true);
+        neosave_restore();
+    }
     neo_log("neogeocd: BIOS load r=%d, starting core", r);
     set_loading_state(0);                 // starts the core
     if (r) return r;
@@ -553,5 +563,6 @@ static int neocd_boot(void) {
 
 int loadneogeocd(const char *fname) {
     neo_log("neogeocd: loadneogeocd %s", fname);
+    neocd_fname = fname;
     return cdchd_load(fname, neocd_boot);
 }

@@ -25,6 +25,7 @@
 //     reset to the blank default; dumping it would overwrite a real save with an empty one.
 //     pcesave_set_game() therefore only DROPS pending state, it never flushes.
 #include "pcesave.h"
+#include "neosave.h"
 #include "tc_utils.h"
 #include "ff.h"
 #include "FreeRTOS.h"
@@ -61,13 +62,16 @@ static void sv_log(const char *fmt, ...) {
 
 // ---- RX task hooks (must stay cheap: no SD I/O here) ----
 void pcesave_rx_byte(uint16_t blk, uint16_t off, uint8_t b) {
+    if (neosave_active()) { neosave_rx_byte(blk, off, b); return; }   // same 0x0A frames
     if (blk < SV_BLOCKS && off < SV_BLK) sv_rx[blk * SV_BLK + off] = b;
 }
 void pcesave_rx_block_done(uint16_t blk) {
+    if (neosave_active()) { neosave_rx_block_done(blk); return; }
     sv_rx_blk = blk;
     if (sv_blk_sem) xSemaphoreGive(sv_blk_sem);
 }
 void pcesave_rx_dirty(void) {
+    if (neosave_active()) { neosave_rx_dirty(); return; }
     sv_dirty = true;
     if (sv_task) xTaskNotifyGive(sv_task);
 }
@@ -127,6 +131,7 @@ static bool sv_read_file(const char *path, uint8_t *img) {
 // ---- API ----
 void pcesave_set_game(const char *fname) {
     if (!sv_mutex) return;
+    neosave_off();                                                  // the PC Engine owns the channel now
     xSemaphoreTake(sv_mutex, portMAX_DELAY);
     // Drive prefix from the path itself ("sd:" / "usb:"), else the mounted drive.
     const char *colon = strchr(fname, ':');

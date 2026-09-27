@@ -45,6 +45,7 @@ extern "C" {
 #include "chd_fatfs.h"
 #include "core/pcecd.h"
 #include "core/pcesave.h"
+#include "core/neosave.h"
 #include "init.h"
 #include "menu_manager.h"
 #include "options_menu.h"
@@ -429,6 +430,7 @@ static void send_hid_to_core(void) {
     // point) -- and since the OSD is the only way to switch games, this is also what makes
     // sure the old game is saved before another one loads.
     pcesave_flush_now();
+    neosave_flush_now();
 }
 
 // // (R L X A RT LT DN UP START SELECT Y B)
@@ -1099,6 +1101,7 @@ int main(void)
     uart1_rx_irq_init();
     xTaskCreate(uart1_rx_task, "uart1_rx_task", UART1_RX_TASK_STACK_SIZE, NULL, UART1_RX_TASK_PRIORITY, &uart1_rx_task_handle);
     cd_req_queue = xQueueCreate(16, sizeof(cd_req_t));
+    neosave_init();                     // Neo Geo backup RAM <-> SD card, see core/neosave.cpp
     pcesave_init();                     // backup RAM <-> SD card, see core/pcesave.cpp
     xTaskCreate(cd_serve_task, "cd_serve_task", CD_SERVE_TASK_STACK_SIZE, NULL, CD_SERVE_TASK_PRIORITY, &cd_serve_task_handle);
     wifi_debug_start();     // real no-op unless built with WIFI_DEBUG=1
