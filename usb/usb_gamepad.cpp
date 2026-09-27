@@ -18,7 +18,11 @@
 // Uncomment this to enable on-screen debug messages
 // #define DEBUG_ON
 
-#define MAX_REPORT_SIZE   8
+#define MAX_REPORT_SIZE  64      // full-speed interrupt endpoints carry up to 64 bytes
+#define MAX_REPORT_DESC 512
+#ifndef MIN
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+#endif
 #define XBOX_REPORT_SIZE 20
 
 #define STATE_NONE      0 
@@ -72,6 +76,22 @@ static struct usb_config {
 TaskHandle_t usb_handle;
 USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX uint8_t hid_buffer[CONFIG_USBHOST_MAX_HID_CLASS][MAX_REPORT_SIZE];
 USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX uint8_t xbox_buffer[CONFIG_USBHOST_MAX_XBOX_CLASS][XBOX_REPORT_SIZE];
+USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX uint8_t report_desc_buf[MAX_REPORT_DESC];
+
+// The HID class driver keeps only the first 128 bytes of the report descriptor, so a
+// longer one (the Switch Pro Controller's is 203) is cut mid-item and fails to parse.
+// Fetch the whole descriptor again here. Returns its length, or -1.
+static int fetch_report_descriptor(struct usbh_hid *hid_class) {
+    struct usb_setup_packet *setup = hid_class->hport->setup;
+    setup->bmRequestType = USB_REQUEST_DIR_IN | USB_REQUEST_STANDARD | USB_REQUEST_RECIPIENT_INTERFACE;
+    setup->bRequest = USB_REQUEST_GET_DESCRIPTOR;
+    setup->wValue = HID_DESCRIPTOR_TYPE_HID_REPORT << 8;
+    setup->wIndex = hid_class->intf;
+    setup->wLength = MAX_REPORT_DESC;
+    int ret = usbh_control_transfer(hid_class->hport, setup, report_desc_buf);
+    // actual_length includes the 8-byte setup stage (as in usbh_hid.c)
+    return ret > 8 ? ret - 8 : -1;
+}
 
 // keep a map of joysticks to be able to report
 // them individually
@@ -171,7 +191,13 @@ static void usbh_update(struct usb_config *usb) {
             // DEBUG("report descriptor: %p", usb->hid_info[i].hid_class->report_desc);
             
             // parse report descriptor ...
-            if(skip || !parse_report_descriptor(usb->hid_info[i].hid_class->report_desc, 128, &usb->hid_info[i].report, NULL)) {
+            int desc_len = skip ? -1 : fetch_report_descriptor(usb->hid_info[i].hid_class);
+            const uint8_t *desc = report_desc_buf;
+            if (desc_len < 0) {                 // fall back to the class driver's copy
+                desc = usb->hid_info[i].hid_class->report_desc;
+                desc_len = 128;
+            }
+            if(skip || !parse_report_descriptor(desc, desc_len, &usb->hid_info[i].report, NULL)) {
                 usb->hid_info[i].state = STATE_FAILED;   // parsing failed, don't use
                 return;
             }
@@ -476,7 +502,10 @@ static void usbh_hid_thread(void *argument) {
                 usbh_int_urb_fill(&usb->hid_info[i].hid_class->intin_urb,
                         usb->hid_info[i].hid_class->hport,
                         usb->hid_info[i].hid_class->intin, usb->hid_info[i].buffer,
-                        usb->hid_info[i].report.report_size + (usb->hid_info[i].report.report_id_present ? 1:0),
+                        // never more than the buffer holds: a longer report used to
+                        // overrun into the next device's buffer
+                        MIN(usb->hid_info[i].report.report_size + (usb->hid_info[i].report.report_id_present ? 1:0),
+                            MAX_REPORT_SIZE),
                         0, usbh_hid_callback, &usb->hid_info[i]);     
 
                 xTaskCreate(usbh_hid_client_thread, (char *)"hid_client_task", 2048,
