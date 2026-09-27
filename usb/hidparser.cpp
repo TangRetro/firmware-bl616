@@ -399,6 +399,23 @@ bool parse_report_descriptor(const uint8_t *rep, uint16_t rep_size, hid_report_t
 					// we only support mice, keyboards and joysticks
 					hidp_extreme_debugf("USAGE(%lu/0x%lx)", value, value);
 
+					// HID 1.11 6.2.2.8: a 4-byte USAGE is an extended usage carrying its own
+					// page in the high 16 bits. The Switch Pro Controller declares its sticks
+					// this way (0x10030/0x10031...), so fold Generic Desktop and Button usages
+					// back to the short form the checks below expect.
+					if(value > 0xffff) {
+						uint16_t ext_page = value >> 16;
+						if(ext_page == USAGE_PAGE_GENERIC_DESKTOP || ext_page == USAGE_PAGE_BUTTON) {
+							hidp_debugf(" -> extended usage, page %u, id 0x%lx",
+							            (unsigned)ext_page, (unsigned long)(value & 0xffff));
+							if(ext_page == USAGE_PAGE_BUTTON)
+								btns = 1;
+							else if(generic_desktop < 0)
+								generic_desktop = collection_depth;
+							value &= 0xffff;
+						}
+					}
+
 					if( !collection_depth && (value == USAGE_KEYBOARD)) {
 						// usage(keyboard) is always allowed
 						hidp_debugf(" -> Keyboard");
