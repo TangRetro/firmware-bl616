@@ -5,6 +5,7 @@
 #include <string>
 #include "FreeRTOS.h"
 #include "task.h"
+#include "semphr.h"
 
 #include "tc_utils.h"
 #include "cores.h"
@@ -281,8 +282,23 @@ static uint8_t pcecd_audio_buf[PCECD_AUDIO_BYTES];
 static USB_NOCACHE_RAM_SECTION FIL f_chd;
 static chd_file *pcecd_chd = NULL;
 static const chd_header *pcecd_hdr = NULL;
-static uint8_t *pcecd_hunk_buf = NULL;
-static uint32_t pcecd_cached_hunk = 0xFFFFFFFF;   // real sentinel: nothing cached yet
+// HUNK CACHE + READ-AHEAD (2026-09-27, Neo Geo CD audio). Two hunk buffers. The serving task
+// decodes a hunk only on a miss; after every sector it asks the read-ahead task (priority
+// below the serving task) to decode the NEXT hunk into the buffer it is not reading from.
+// Why: one chd_read() takes ~62 ms, and the Neo Geo CD's CD-audio FIFO (cdda.v, MiSTer's)
+// holds 2 sectors = 27 ms -- decoding in line with a request starved it at every hunk
+// (garbled music). Exactly one chd_read() runs at a time (pcecd_chd_mtx): libchdr is never
+// re-entered. Tags and pcecd_hlast change only in short critical sections; the read-ahead
+// only ever writes the entry that is not pcecd_hlast, so a buffer being served from is never
+// overwritten. Without a second buffer (malloc failed) this degrades to the old one-hunk cache.
+#define PCECD_HTAG_NONE 0xFFFFFFFFu
+#define PCECD_HTAG_BUSY 0xFFFFFFFEu   // being decoded
+static uint8_t *pcecd_hbuf[2] = {NULL, NULL};
+static volatile uint32_t pcecd_htag[2] = {PCECD_HTAG_NONE, PCECD_HTAG_NONE};
+static volatile int pcecd_hlast = 0;           // the entry most recently served from
+static SemaphoreHandle_t pcecd_chd_mtx = NULL;
+static TaskHandle_t pcecd_pf_task = NULL;
+static volatile uint32_t pcecd_pf_decodes = 0; // hunks decoded ahead
 static uint32_t pcecd_sectors_per_hunk = 0;
 
 // Real, minimal per-track TOC state, computed by pcecd_read_toc() using the exact same
@@ -374,16 +390,20 @@ bool pcecd_is_mounted(void) {
 static void pcecd_trace_reset(void);
 
 void pcecd_unload(void) {
+    // The read-ahead task may be inside chd_read(): take the decode lock first.
+    if (pcecd_chd_mtx) xSemaphoreTake(pcecd_chd_mtx, portMAX_DELAY);
     if (pcecd_chd) {
         chd_close(pcecd_chd);
         pcecd_chd = NULL;
         pcecd_hdr = NULL;
     }
-    if (pcecd_hunk_buf) {
-        free(pcecd_hunk_buf);
-        pcecd_hunk_buf = NULL;
+    for (int e = 0; e < 2; e++) {
+        if (pcecd_hbuf[e]) free(pcecd_hbuf[e]);
+        pcecd_hbuf[e] = NULL;
+        pcecd_htag[e] = PCECD_HTAG_NONE;
     }
-    pcecd_cached_hunk = 0xFFFFFFFF;
+    pcecd_hlast = 0;
+    if (pcecd_chd_mtx) xSemaphoreGive(pcecd_chd_mtx);
     pcecd_sectors_per_hunk = 0;
     // Re-arm the per-session one-shots. Without this a disc loaded a second time in one
     // MCU session inherits the first load's spent flags, so its SERVE-FAIL / DECODE-START
@@ -623,9 +643,10 @@ static void pcecd_progress_tick(void) {
     pcecd_next_report *= 2;
     char buf[176];
     snprintf(buf, sizeof(buf),
-             "cdprog: reqs=%lu hunk_reads=%lu last_lba=%lu rxhi=%u ringhi=%u ringdrop=%lu "
+             "cdprog: reqs=%lu hunk_reads=%lu ahead=%lu last_lba=%lu rxhi=%u ringhi=%u ringdrop=%lu "
              "dma=%lu/%lu dmams=%lu/%lu dmato=%lu lkto=%lu tick=%lu",
              (unsigned long)pcecd_req_count, (unsigned long)pcecd_hunk_reads,
+             (unsigned long)pcecd_pf_decodes,
              (unsigned long)pcecd_last_lba, (unsigned)uart1_rx_hiwater,
              (unsigned)u1rx_ring_hiwater, (unsigned long)u1rx_ring_drops,
              (unsigned long)pcecd_dma_started, (unsigned long)pcecd_dma_done,
@@ -649,6 +670,75 @@ static bool pcecd_lba_to_file_frame(uint32_t lba, uint32_t *out) {
         }
     }
     return false;
+}
+
+// The buffer holding `hunk`, or NULL. Marks it as the one being served from.
+static const uint8_t *pcecd_hunk_lookup(uint32_t hunk) {
+    const uint8_t *p = NULL;
+    taskENTER_CRITICAL();
+    for (int e = 0; e < 2; e++)
+        if (pcecd_hbuf[e] && pcecd_htag[e] == hunk) { pcecd_hlast = e; p = pcecd_hbuf[e]; break; }
+    taskEXIT_CRITICAL();
+    return p;
+}
+
+// Serving-side miss: decode `hunk` now (waiting for a read-ahead in progress first -- it
+// may be decoding this very hunk).
+static chd_error pcecd_hunk_decode(uint32_t hunk, const uint8_t **out) {
+    xSemaphoreTake(pcecd_chd_mtx, portMAX_DELAY);
+    const uint8_t *hit = pcecd_hunk_lookup(hunk);
+    if (hit) { xSemaphoreGive(pcecd_chd_mtx); *out = hit; return CHDERR_NONE; }
+    int e;
+    taskENTER_CRITICAL();
+    e = pcecd_hbuf[1] ? (pcecd_hlast ^ 1) : 0;
+    pcecd_htag[e] = PCECD_HTAG_BUSY;
+    taskEXIT_CRITICAL();
+    chd_error err = chd_read(pcecd_chd, hunk, pcecd_hbuf[e]);
+    taskENTER_CRITICAL();
+    pcecd_htag[e] = (err == CHDERR_NONE) ? hunk : PCECD_HTAG_NONE;
+    if (err == CHDERR_NONE) pcecd_hlast = e;
+    taskEXIT_CRITICAL();
+    xSemaphoreGive(pcecd_chd_mtx);
+    *out = (err == CHDERR_NONE) ? pcecd_hbuf[e] : NULL;
+    return err;
+}
+
+static void pcecd_prefetch(uint32_t hunk) {
+    if (pcecd_pf_task && pcecd_hbuf[1])
+        xTaskNotify(pcecd_pf_task, hunk, eSetValueWithOverwrite);
+}
+
+static void pcecd_pf_task_fn(void *arg) {
+    (void)arg;
+    uint32_t want;
+    for (;;) {
+        if (xTaskNotifyWait(0, 0xFFFFFFFFu, &want, portMAX_DELAY) != pdTRUE) continue;
+        xSemaphoreTake(pcecd_chd_mtx, portMAX_DELAY);
+        if (pcecd_chd && pcecd_hdr && pcecd_hbuf[1] && want < pcecd_hdr->totalhunks) {
+            int x = -1;
+            taskENTER_CRITICAL();
+            if (pcecd_htag[0] != want && pcecd_htag[1] != want) {
+                x = pcecd_hlast ^ 1;
+                pcecd_htag[x] = PCECD_HTAG_BUSY;
+            }
+            taskEXIT_CRITICAL();
+            if (x >= 0) {
+                chd_error err = chd_read(pcecd_chd, want, pcecd_hbuf[x]);
+                taskENTER_CRITICAL();
+                pcecd_htag[x] = (err == CHDERR_NONE) ? want : PCECD_HTAG_NONE;
+                taskEXIT_CRITICAL();
+                pcecd_pf_decodes++;
+            }
+        }
+        xSemaphoreGive(pcecd_chd_mtx);
+    }
+}
+
+// Once per MCU session: the decode lock and the read-ahead task.
+static void pcecd_cache_init(void) {
+    if (!pcecd_chd_mtx) pcecd_chd_mtx = xSemaphoreCreateMutex();
+    if (!pcecd_pf_task)
+        xTaskCreate(pcecd_pf_task_fn, "cd_readahead", 8192 / sizeof(StackType_t), NULL, 1, &pcecd_pf_task);
 }
 
 void pcecd_serve_sector(uint32_t lba) {
@@ -686,7 +776,8 @@ void pcecd_serve_sector(uint32_t lba) {
     uint32_t sector_in_hunk = fframe % pcecd_sectors_per_hunk;
     pcecd_ring_mark(PCECD_RG_MAPPED, hunknum, 0);
 
-    if (hunknum != pcecd_cached_hunk) {
+    const uint8_t *hb = pcecd_hunk_lookup(hunknum);
+    if (!hb) {
         // Announce the decode BEFORE running it. Without this, "returned early" and
         // "still inside chd_read" produce identical logs -- the same trap that made the
         // chd_open hang take three hardware rounds earlier today.
@@ -706,7 +797,7 @@ void pcecd_serve_sector(uint32_t lba) {
             file_log(b);
         }
         pcecd_ring_mark(PCECD_RG_DECODE, hunknum, 0);
-        chd_error err = chd_read(pcecd_chd, hunknum, pcecd_hunk_buf);
+        chd_error err = pcecd_hunk_decode(hunknum, &hb);
         if (err != CHDERR_NONE) {
             pcecd_ring_mark(PCECD_RG_F_READ, hunknum, (uint8_t)err);
             char b[176], h[96];
@@ -718,11 +809,10 @@ void pcecd_serve_sector(uint32_t lba) {
             return;
         }
         pcecd_ring_mark(PCECD_RG_DECODED, hunknum, 0);
-        pcecd_cached_hunk = hunknum;
         pcecd_hunk_reads++;
     }
 
-    const uint8_t *raw = pcecd_hunk_buf + (uint32_t)sector_in_hunk * PCECD_RAW_UNIT_BYTES
+    const uint8_t *raw = hb + (uint32_t)sector_in_hunk * PCECD_RAW_UNIT_BYTES
                           + PCECD_USER_DATA_OFFSET;
     if (PCECD_TRACE_SECTORS && pcecd_sec_logged < PCECD_TRACE_SECTORS_MAX) {
         pcecd_sec_logged++;
@@ -735,6 +825,7 @@ void pcecd_serve_sector(uint32_t lba) {
     pcecd_send_sector_chunk(0, raw, 1024);
     pcecd_send_sector_chunk(1, raw + 1024, 1024);
     pcecd_ring_mark(PCECD_RG_SENT, 0xFFFFFFFF, 0);
+    pcecd_prefetch(hunknum + 1);
 
     // One-shot proof that a sector was actually decoded AND sent, with the mapping that
     // produced it -- lba, the file frame it resolved to, the hunk, and the first bytes of
@@ -791,7 +882,8 @@ void pcecd_serve_audio_sector(uint32_t lba) {
     uint32_t sector_in_hunk = fframe % pcecd_sectors_per_hunk;
     pcecd_ring_mark(PCECD_RG_MAPPED, hunknum, 0);
 
-    if (hunknum != pcecd_cached_hunk) {
+    const uint8_t *hb = pcecd_hunk_lookup(hunknum);
+    if (!hb) {
         // Announce the decode BEFORE running it. Without this, "returned early" and
         // "still inside chd_read" produce identical logs -- the same trap that made the
         // chd_open hang take three hardware rounds earlier today.
@@ -811,17 +903,16 @@ void pcecd_serve_audio_sector(uint32_t lba) {
             file_log(b);
         }
         pcecd_ring_mark(PCECD_RG_DECODE, hunknum, 0);
-        chd_error err = chd_read(pcecd_chd, hunknum, pcecd_hunk_buf);
+        chd_error err = pcecd_hunk_decode(hunknum, &hb);
         if (err != CHDERR_NONE) {
             pcecd_ring_mark(PCECD_RG_F_READ, hunknum, (uint8_t)err);
             return;
         }
         pcecd_ring_mark(PCECD_RG_DECODED, hunknum, 0);
-        pcecd_cached_hunk = hunknum;
         pcecd_hunk_reads++;
     }
 
-    const uint8_t *raw = pcecd_hunk_buf + (uint32_t)sector_in_hunk * PCECD_RAW_UNIT_BYTES;
+    const uint8_t *raw = hb + (uint32_t)sector_in_hunk * PCECD_RAW_UNIT_BYTES;
 
     // Big-endian -> little-endian, 16 bits at a time. See PCECD_AUDIO_BYTES' comment.
     //
@@ -844,6 +935,7 @@ void pcecd_serve_audio_sector(uint32_t lba) {
     else
         pcecd_send_sector_blocking(pcecd_audio_buf);
     pcecd_ring_mark(PCECD_RG_SENT, 0xFFFFFFFF, 0);
+    pcecd_prefetch(hunknum + 1);
 }
 
 // Real TOC walk, computing real per-track start LBA + control byte using the exact same
@@ -973,6 +1065,7 @@ int cdchd_load(const char *fname, int (*boot)(void)) {
         goto loadpcecd_end;
     }
 
+    pcecd_cache_init();
     pcecd_unload();   // real: drop any previously mounted disc first
     file_log("loadpcecd: pcecd_unload done");
 
@@ -1003,8 +1096,8 @@ int cdchd_load(const char *fname, int (*boot)(void)) {
         file_log(buf);
     }
 
-    pcecd_hunk_buf = (uint8_t *)malloc(pcecd_hdr->hunkbytes);
-    if (!pcecd_hunk_buf) {
+    pcecd_hbuf[0] = (uint8_t *)malloc(pcecd_hdr->hunkbytes);
+    if (!pcecd_hbuf[0]) {
         file_log("loadpcecd: malloc for hunk buf FAILED");
         overlay_status("Out of memory for CD hunk buffer");
         chd_close(pcecd_chd);
@@ -1012,7 +1105,11 @@ int cdchd_load(const char *fname, int (*boot)(void)) {
         goto loadpcecd_end;
     }
     file_log("loadpcecd: hunk buf malloc ok");
-    pcecd_cached_hunk = 0xFFFFFFFF;
+    // The read-ahead buffer is optional: without it the cache is the old single hunk.
+    pcecd_hbuf[1] = (uint8_t *)malloc(pcecd_hdr->hunkbytes);
+    file_log(pcecd_hbuf[1] ? "loadpcecd: read-ahead buffer ok" : "loadpcecd: no read-ahead buffer (malloc)");
+    pcecd_htag[0] = pcecd_htag[1] = PCECD_HTAG_NONE;
+    pcecd_hlast = 0;
 
     if (!pcecd_read_toc()) {
         file_log("loadpcecd: pcecd_read_toc FAILED, abort");
