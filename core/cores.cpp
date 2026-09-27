@@ -37,12 +37,16 @@ void init_core_list() {
         {3, "Game Boy Advance", "gba", "gbatang.bin", loadgba, create_default_menu},
         {4, "MegaDrive / Genesis", "genesis", "mdtang.bin", loadmd, create_default_menu},
         {5, "Sega Master System", "sms", "smstang.bin", loadsms, create_default_menu},
-        {6, "IBM PC/XT", "pc", "pctang.bin", loadpc, create_pcxt_menu}
+        {6, "IBM PC/XT", "pc", "pctang.bin", loadpc, create_pcxt_menu},
+        {8, "PC Engine", "pce", "pcetang.bin", loadpce, create_default_menu}
     };
 
     main_menu_config = {1,2,
 #if defined(TANG_MEGA60K) || defined(TANG_MEGA138K) || defined(TANG_CONSOLE60K) || defined(TANG_CONSOLE138K)
         3,4,5,6,
+#endif
+#if defined(TANG_CONSOLE60K)
+        8,                  // pcetang loads games on Console 60K only for now
 #endif
         -1, -2
     };
