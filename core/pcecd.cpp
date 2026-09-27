@@ -6,6 +6,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "semphr.h"
+#include "bflb_mtimer.h"
 
 #include "tc_utils.h"
 #include "cores.h"
@@ -299,6 +300,9 @@ static volatile int pcecd_hlast = 0;           // the entry most recently served
 static SemaphoreHandle_t pcecd_chd_mtx = NULL;
 static TaskHandle_t pcecd_pf_task = NULL;
 static volatile uint32_t pcecd_pf_decodes = 0; // hunks decoded ahead
+volatile uint32_t pcecd_req_t_us = 0;
+static uint32_t pcecd_alat_max = 0, pcecd_alat_n = 0;
+static uint64_t pcecd_alat_sum = 0;
 static uint32_t pcecd_sectors_per_hunk = 0;
 
 // Real, minimal per-track TOC state, computed by pcecd_read_toc() using the exact same
@@ -643,10 +647,11 @@ static void pcecd_progress_tick(void) {
     pcecd_next_report *= 2;
     char buf[176];
     snprintf(buf, sizeof(buf),
-             "cdprog: reqs=%lu hunk_reads=%lu ahead=%lu last_lba=%lu rxhi=%u ringhi=%u ringdrop=%lu "
+             "cdprog: reqs=%lu hunk_reads=%lu ahead=%lu alat=%lu/%luus last_lba=%lu rxhi=%u ringhi=%u ringdrop=%lu "
              "dma=%lu/%lu dmams=%lu/%lu dmato=%lu lkto=%lu tick=%lu",
              (unsigned long)pcecd_req_count, (unsigned long)pcecd_hunk_reads,
              (unsigned long)pcecd_pf_decodes,
+             (unsigned long)(pcecd_alat_n ? pcecd_alat_sum / pcecd_alat_n : 0), (unsigned long)pcecd_alat_max,
              (unsigned long)pcecd_last_lba, (unsigned)uart1_rx_hiwater,
              (unsigned)u1rx_ring_hiwater, (unsigned long)u1rx_ring_drops,
              (unsigned long)pcecd_dma_started, (unsigned long)pcecd_dma_done,
@@ -930,6 +935,11 @@ void pcecd_serve_audio_sector(uint32_t lba) {
     // then free to decode the next hunk while this one is still going out on the wire --
     // that overlap is the fix for the CD-DA underrun. Falls back to the old blocking
     // path if the DMA channel was not available at init.
+    {   // request -> send latency (audio only): see pcecd_req_t_us
+        uint32_t lat = (uint32_t)bflb_mtimer_get_time_us() - pcecd_req_t_us;
+        if (lat > pcecd_alat_max) pcecd_alat_max = lat;
+        pcecd_alat_sum += lat; pcecd_alat_n++;
+    }
     if (pcecd_tx_dma != NULL)
         pcecd_send_sector_dma(pcecd_audio_buf);
     else

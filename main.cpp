@@ -91,6 +91,7 @@ TaskHandle_t uart1_rx_task_handle;
 struct cd_req_t {
     uint32_t lba;
     bool     is_audio;
+    uint32_t t_us;       // arrival (mtimer): request -> audio send latency, see pcecd_req_t_us
 };
 static QueueHandle_t cd_req_queue;
 // Highest UART1 RX FIFO occupancy ever seen, reported in pcecd's cdprog line.
@@ -548,6 +549,7 @@ static void cd_serve_task(void *pvParameters)
         // gone quiet, which is exactly the stalled state worth dumping. Serving is
         // unaffected -- a queued request still wakes this immediately.
         if (xQueueReceive(cd_req_queue, &req, pdMS_TO_TICKS(1000)) == pdTRUE) {
+            pcecd_req_t_us = req.t_us;
             if (req.is_audio)
                 pcecd_serve_audio_sector(req.lba);
             else
@@ -751,7 +753,7 @@ static void uart1_rx_task(void *pvParameters)
                     // Non-blocking on purpose: if the queue were ever full, dropping the
                     // request is still better than stalling the RX poll, which is the
                     // very failure this exists to prevent.
-                    cd_req_t req = { lba, is_audio };
+                    cd_req_t req = { lba, is_audio, (uint32_t)bflb_mtimer_get_time_us() };
                     if (cd_req_queue)
                         xQueueSend(cd_req_queue, &req, 0);
                     pos = 0;

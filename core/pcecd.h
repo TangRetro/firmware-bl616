@@ -25,6 +25,9 @@ extern bool pcecd_is_mounted(void);
 // 2352-byte raw CD-DA sector (direct 16-bit-LE stereo PCM, no header to strip).
 extern void pcecd_serve_sector(uint32_t lba);
 extern void pcecd_serve_audio_sector(uint32_t lba);
+// Arrival time (mtimer us) of the request being served: the audio path logs the latency from
+// here to its send (cdprog alat=avg/max). CD audio at 2 Mbaud needs it under ~1.5 ms on average.
+extern volatile uint32_t pcecd_req_t_us;
 
 // Called from cd_serve_task whenever its request queue goes quiet. Writes the per-request
 // progress ring to the SD log once per quiet period, which is how a stalled boot says
