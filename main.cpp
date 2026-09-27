@@ -34,6 +34,7 @@ extern "C" {
 #include "overlay.h"
 #include "init.h"
 #include "menu_manager.h"
+#include "core/pcesave.h"
 
 // Uncomment this to enable UART console (use with caution. it may interfere with MCU-FPGA communication)
 #define UART_CONSOLE
@@ -220,6 +221,9 @@ static void send_hid_to_core(void) {
         vTaskDelay(pdMS_TO_TICKS(10));
     }
     dprint("Stopped sending HID to core.");
+    // The in-game OSD is opening: save if the game wrote backup RAM. The OSD is the only
+    // way to switch games, so this also saves the old game before another one loads.
+    pcesave_flush_now();
 }
 
 // // (R L X A RT LT DN UP START SELECT Y B)
@@ -417,6 +421,17 @@ static void uart1_rx_task(void *pvParameters)
                 } else
                     pos++;
 
+            } else if (type == 0x0A) {           // save-RAM block: blk[15:0] + 512 bytes
+                static uint16_t sv_blk;
+                uint16_t k = pos - 4;
+                if (k == 0)      sv_blk = (uint16_t)ch << 8;
+                else if (k == 1) sv_blk |= ch;
+                else             pcesave_rx_byte(sv_blk, k - 2, ch);
+                if (k == 2 + 511) { pcesave_rx_block_done(sv_blk); pos = 0; }
+                else pos++;
+            } else if (type == 0x0B) {           // the game wrote backup RAM
+                pcesave_rx_dirty();
+                pos = 0;
             } else {
                 pos = 0; // Reset if we get out of sync
             }
@@ -630,6 +645,7 @@ int main(void)
     overlay_status("Creating tasks...");
     // Create the tasks
     xTaskCreate(main_task, "main_task", MAIN_TASK_STACK_SIZE, NULL, MAIN_TASK_PRIORITY, &main_task_handle);
+    pcesave_init();             // backup RAM <-> SD card, see core/pcesave.cpp
     uart1_rx_irq_init();        // before the parser task runs, so no byte is missed
     xTaskCreate(uart1_rx_task, "uart1_rx_task", UART1_RX_TASK_STACK_SIZE, NULL, UART1_RX_TASK_PRIORITY, &uart1_rx_task_handle);
     

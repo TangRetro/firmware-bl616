@@ -9,10 +9,12 @@
 #include "utils.h"
 #include "cores.h"
 #include "overlay.h"
+#include "pcesave.h"
 
 int loadpce(const char *fname) {
     DEBUG("loadpce start\n");
     FRESULT r = FR_NO_FILE;
+    pcesave_set_game(fname);        // names the save file
 
     // .sgx is a SuperGrafx HuCard; the core handles both
     if (strcasestr(fname, ".pce") == NULL && strcasestr(fname, ".sgx") == NULL) {
@@ -53,6 +55,7 @@ int loadpce(const char *fname) {
 
     DEBUG("loadpce: %d bytes\n", total);
     overlay_status("Success");
+    pcesave_restore();              // backup RAM goes in while the core is still held
     core_running = true;
 
     overlay(0);		// turn off OSD
