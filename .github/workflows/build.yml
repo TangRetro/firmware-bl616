@@ -1,0 +1,79 @@
+# Copyright (c) 2026 Romain Tisserand
+# SPDX-License-Identifier: Apache-2.0
+name: build
+
+# Builds the firmware for each Tang board. The T-Head toolchain is required (stock
+# riscv64-unknown-elf-gcc rejects -mtune=e907); the SDK is nand2mario/bouffalo_sdk.
+# Both are pinned by commit and cached.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  TOOLCHAIN_REPO: https://github.com/bouffalolab/toolchain_gcc_t-head_linux.git
+  TOOLCHAIN_SHA: c4afe91
+  SDK_REPO: https://github.com/nand2mario/bouffalo_sdk.git
+  SDK_SHA: 7f44f9e
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        board: [console60k, primer25k, nano20k]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: firmware
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake make git
+
+      - name: Cache T-Head toolchain
+        id: cache-toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/toolchain_gcc_t-head_linux
+          key: thead-${{ env.TOOLCHAIN_SHA }}
+
+      - name: Fetch T-Head toolchain
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+        run: |
+          git clone --filter=blob:none "$TOOLCHAIN_REPO" ~/toolchain_gcc_t-head_linux
+          git -C ~/toolchain_gcc_t-head_linux checkout "$TOOLCHAIN_SHA"
+
+      - name: Cache Bouffalo SDK
+        id: cache-sdk
+        uses: actions/cache@v4
+        with:
+          path: ~/bouffalo_sdk
+          key: blsdk-${{ env.SDK_SHA }}
+
+      - name: Fetch Bouffalo SDK
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        run: |
+          git clone --filter=blob:none "$SDK_REPO" ~/bouffalo_sdk
+          git -C ~/bouffalo_sdk checkout "$SDK_SHA"
+          git -C ~/bouffalo_sdk submodule update --init --recursive
+
+      - name: Build ${{ matrix.board }}
+        working-directory: firmware
+        run: |
+          export PATH="$HOME/toolchain_gcc_t-head_linux/bin:$PATH"
+          riscv64-unknown-elf-gcc --version | grep -qi xuantie
+          make TANG_BOARD=${{ matrix.board }} BL_SDK_BASE="$HOME/bouffalo_sdk" -j"$(nproc)"
+          cp build/build_out/tangcore_bl616.bin tangcore_bl616_${{ matrix.board }}.bin
+          md5sum tangcore_bl616_${{ matrix.board }}.bin
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tangcore_bl616_${{ matrix.board }}
+          path: firmware/tangcore_bl616_${{ matrix.board }}.bin
+          if-no-files-found: error
