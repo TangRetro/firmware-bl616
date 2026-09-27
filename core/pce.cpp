@@ -10,11 +10,11 @@
 #include "cores.h"
 #include "overlay.h"
 #include "pcesave.h"
+#include "pcecd.h"
 
 int loadpce(const char *fname) {
     DEBUG("loadpce start\n");
     FRESULT r = FR_NO_FILE;
-    pcesave_set_game(fname);        // names the save file
 
     // .sgx is a SuperGrafx HuCard; the core handles both
     if (strcasestr(fname, ".pce") == NULL && strcasestr(fname, ".sgx") == NULL) {
@@ -64,4 +64,14 @@ loadpce_close_file:
     set_loading_state(0);   // turn off game loading, this starts the core
     f_close(&fcore);
     return r;
+}
+
+// The PC Engine entry owns HuCards (.pce/.sgx) and CD images (.chd).
+int loadpce_dispatch(const char *fname) {
+    pcesave_set_game(fname);        // the save is named after the image picked, disc included
+    if (strcasestr(fname, ".chd") != NULL)
+        return loadpcecd(fname);
+    if (pcecd_is_mounted())
+        pcecd_unload();
+    return loadpce(fname);
 }

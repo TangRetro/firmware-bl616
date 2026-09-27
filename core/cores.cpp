@@ -38,7 +38,7 @@ void init_core_list() {
         {4, "MegaDrive / Genesis", "genesis", "mdtang.bin", loadmd, create_default_menu},
         {5, "Sega Master System", "sms", "smstang.bin", loadsms, create_default_menu},
         {6, "IBM PC/XT", "pc", "pctang.bin", loadpc, create_pcxt_menu},
-        {8, "PC Engine", "pce", "pcetang.bin", loadpce, create_default_menu}
+        {8, "PC Engine", "pce", "pcetang.bin", loadpce_dispatch, create_default_menu}
     };
 
     main_menu_config = {1,2,

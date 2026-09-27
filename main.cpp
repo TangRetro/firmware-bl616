@@ -35,6 +35,8 @@ extern "C" {
 #include "init.h"
 #include "menu_manager.h"
 #include "core/pcesave.h"
+#include "core/pcecd.h"
+#include "queue.h"
 
 // Uncomment this to enable UART console (use with caution. it may interfere with MCU-FPGA communication)
 #define UART_CONSOLE
@@ -139,7 +141,12 @@ static int menu_loadrom(const char *dir) {
     // find core info entry
     core_info *core = NULL;
     string path = fname.substr(fname.find(":")+1);
-    for (int i = 0; i < core_info_list.size(); i++) {
+    // the PC Engine entry browses from the drive root to reach both pce/ and
+    // pcenginecd/, so its files are matched by extension
+    if (strcasestr(path.c_str(), ".pce") || strcasestr(path.c_str(), ".sgx") ||
+        strcasestr(path.c_str(), ".chd"))
+        core = find_core_by_id(8);
+    for (int i = 0; core == NULL && i < core_info_list.size(); i++) {
         core_info *c = &core_info_list[i];
         if (path.find(c->rom_dir) == 0) {
             overlay_status("ROM for: %s", c->display_name);
@@ -278,10 +285,33 @@ int joy_choice(int start_line, int len, int *active, int overlay_key_code) {
     return 0;
 }
 
-#define MAIN_TASK_STACK_SIZE  2048
+#define MAIN_TASK_STACK_SIZE  8192    // opening a CHD (libchdr codecs) needs the room
 #define MAIN_TASK_PRIORITY    3
 #define UART1_RX_TASK_STACK_SIZE  512
 #define UART1_RX_TASK_PRIORITY    3
+
+// PC Engine CD sector requests are queued by the RX task and served here, so a CHD
+// hunk decode never stalls the UART RX parser.
+struct cd_req_t {
+    uint32_t lba;
+    bool     is_audio;
+};
+static QueueHandle_t cd_req_queue;
+#define CD_SERVE_TASK_STACK_SIZE  8192
+#define CD_SERVE_TASK_PRIORITY    2
+
+static void cd_serve_task(void *pvParameters)
+{
+    cd_req_t req;
+    while (1) {
+        if (xQueueReceive(cd_req_queue, &req, portMAX_DELAY) == pdTRUE) {
+            if (req.is_audio)
+                pcecd_serve_audio_sector(req.lba);
+            else
+                pcecd_serve_sector(req.lba);
+        }
+    }
+}
 
 // UART1 RX is drained by an interrupt into a software ring and parsed by
 // uart1_rx_task. Polling left the 32-byte hardware FIFO unattended whenever the task
@@ -421,6 +451,16 @@ static void uart1_rx_task(void *pvParameters)
                 } else
                     pos++;
 
+            } else if (type == 6) {              // CD sector request: is_audio[7:0] lba[23:0]
+                buffer[pos-4] = ch;
+                if (pos == 7) {
+                    cd_req_t req = { ((uint32_t)buffer[1] << 16) | ((uint32_t)buffer[2] << 8) | buffer[3],
+                                     (buffer[0] & 0x01) != 0 };
+                    if (cd_req_queue)
+                        xQueueSend(cd_req_queue, &req, 0);   // never block the RX parser
+                    pos = 0;
+                } else
+                    pos++;
             } else if (type == 0x0A) {           // save-RAM block: blk[15:0] + 512 bytes
                 static uint16_t sv_blk;
                 uint16_t k = pos - 4;
@@ -581,7 +621,8 @@ static void main_task(void *pvParameters)
                 }
             }
             if (core) {
-                std::string dir = std::string(drv).append(core->rom_dir);
+                std::string dir = (core->id == 8) ? std::string(drv)
+                                                   : std::string(drv).append(core->rom_dir);
                 menu_loadrom(dir.c_str());
             }
         } else if (main_menu_config[choice] == -1) {
@@ -646,6 +687,9 @@ int main(void)
     // Create the tasks
     xTaskCreate(main_task, "main_task", MAIN_TASK_STACK_SIZE, NULL, MAIN_TASK_PRIORITY, &main_task_handle);
     pcesave_init();             // backup RAM <-> SD card, see core/pcesave.cpp
+    pcecd_tx_dma_init();
+    cd_req_queue = xQueueCreate(16, sizeof(cd_req_t));
+    xTaskCreate(cd_serve_task, "cd_serve_task", CD_SERVE_TASK_STACK_SIZE, NULL, CD_SERVE_TASK_PRIORITY, NULL);
     uart1_rx_irq_init();        // before the parser task runs, so no byte is missed
     xTaskCreate(uart1_rx_task, "uart1_rx_task", UART1_RX_TASK_STACK_SIZE, NULL, UART1_RX_TASK_PRIORITY, &uart1_rx_task_handle);
     
