@@ -14,7 +14,7 @@
 #include "cores.h"
 #include "overlay.h"
 #include "pcecd.h"
-#include "pcesave.h"
+#include "coresave.h"
 #include "wifi_debug.h"
 
 extern void file_log(const char *msg);   // Diagnostic, defined in main.cpp
@@ -117,7 +117,7 @@ int loadpce(const char *fname) {
     // Backup RAM goes in while the core is still held in the loading state. For a CD game
     // this runs for the syscard, but pcesave_set_game() was given the .chd, so the save is
     // the disc's, not the BIOS's.
-    pcesave_restore();
+    coresave_restore();
     core_running = true;
 
     overlay(0);		// turn off OSD

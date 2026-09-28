@@ -44,7 +44,7 @@ extern "C" {
 #include "overlay.h"
 #include "chd_fatfs.h"
 #include "core/pcecd.h"
-#include "core/pcesave.h"
+#include "core/coresave.h"
 #include "init.h"
 #include "menu_manager.h"
 #include "options_menu.h"
@@ -422,7 +422,7 @@ static void send_hid_to_core(void) {
     // The in-game OSD is opening. Save now if the game wrote backup RAM (MiSTer's autosave
     // point) -- and since the OSD is the only way to switch games, this is also what makes
     // sure the old game is saved before another one loads.
-    pcesave_flush_now();
+    coresave_flush_now();
 }
 
 // // (R L X A RT LT DN UP START SELECT Y B)
@@ -814,11 +814,11 @@ static void uart1_rx_task(void *pvParameters)
                 uint16_t k = pos - 4;
                 if (k == 0)      sv_blk = (uint16_t)ch << 8;
                 else if (k == 1) sv_blk |= ch;
-                else             pcesave_rx_byte(sv_blk, k - 2, ch);
-                if (k == 2 + 511) { pcesave_rx_block_done(sv_blk); pos = 0; }
+                else             coresave_rx_byte(sv_blk, k - 2, ch);
+                if (k == 2 + 511) { coresave_rx_block_done(sv_blk); pos = 0; }
                 else pos++;
             } else if (type == 0x0B) {           // the game wrote backup RAM (1 pad byte)
-                pcesave_rx_dirty();
+                coresave_rx_dirty();
                 pos = 0;
             } else {
                 pos = 0; // Reset if we get out of sync
@@ -1093,7 +1093,7 @@ int main(void)
     uart1_rx_irq_init();
     xTaskCreate(uart1_rx_task, "uart1_rx_task", UART1_RX_TASK_STACK_SIZE, NULL, UART1_RX_TASK_PRIORITY, &uart1_rx_task_handle);
     cd_req_queue = xQueueCreate(16, sizeof(cd_req_t));
-    pcesave_init();                     // backup RAM <-> SD card, see core/pcesave.cpp
+    coresave_init();                    // save RAM <-> SD card, see core/coresave.cpp
     xTaskCreate(cd_serve_task, "cd_serve_task", CD_SERVE_TASK_STACK_SIZE, NULL, CD_SERVE_TASK_PRIORITY, &cd_serve_task_handle);
     wifi_debug_start();     // real no-op unless built with WIFI_DEBUG=1
 
