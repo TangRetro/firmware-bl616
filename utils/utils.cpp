@@ -137,13 +137,23 @@ const char *cstr_find_ignore_case(const char *str, const char *substr) {
 }
 
 static uint32_t core_config;
+// "Auto" choices resolved by the firmware (e.g. NES region from the ROM header): when the
+// field under auto_mask is 0 in the word the options menu keeps, auto_bits go to the core
+// instead. The menu and the .opt file still hold 0, so "Auto" stays Auto.
+static uint32_t auto_mask = 0, auto_bits = 0;
 
 uint32_t get_core_config(void) {
     return core_config;
 }
 
+void set_core_config_auto(uint32_t mask, uint32_t bits) {
+    auto_mask = mask;
+    auto_bits = bits & mask;
+}
+
 void set_core_config(uint32_t config) {
     core_config = config;
+    if (auto_mask && (config & auto_mask) == 0) config |= auto_bits;
     // The options menu runs in-game, so this can meet a CD sector frame in flight: take
     // the TX token like the HID sender does, so the two frames cannot interleave.
     fpga_tx_lock();

@@ -176,5 +176,6 @@ Menu *create_options_menu(int core_id) {
 }
 
 void apply_saved_core_options(int core_id) {
+    set_core_config_auto(0, 0);             // a loader sets its own after this (e.g. NES region)
     set_core_config(load_options(core_id));
 }

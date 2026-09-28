@@ -154,6 +154,9 @@ extern void get_joypad_states(uint16_t *joy1, uint16_t *joy2, uint16_t *hid1, ui
 extern int16_t get_core_id(void);
 extern uint32_t get_core_config(void);
 extern void set_core_config(uint32_t config);
+// Resolve an "Auto" option field: while (config & mask) == 0, send bits instead. Cleared
+// (mask 0) whenever a new core starts.
+extern void set_core_config_auto(uint32_t mask, uint32_t bits);
 
 #define CORE_CONF_MAX 255
 extern char core_conf_str[CORE_CONF_MAX + 1];
