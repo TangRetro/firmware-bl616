@@ -11,10 +11,10 @@
 void coresave_init(void);                       // create the save task; call once at boot
 // The game the user picked. subdir names saves/<subdir>/; size is the save RAM in bytes (a
 // multiple of 512, at most CORESAVE_MAX); blank/blank_len is the start of the image sent
-// when there is no save file yet (the rest is zeros).
-#define CORESAVE_MAX 32768
+// when there is no save file yet; the rest is `fill`.
+#define CORESAVE_MAX 65536
 void coresave_set_game(const char *fname, const char *subdir, uint32_t size,
-                       const uint8_t *blank, uint32_t blank_len);
+                       const uint8_t *blank, uint32_t blank_len, uint8_t fill = 0);
 void coresave_no_game(void);                    // the loaded game has no save RAM
 void coresave_restore(void);                    // send the save into the FPGA; core must not run yet
 void coresave_flush_now(void);                  // save now if the game wrote since the last save

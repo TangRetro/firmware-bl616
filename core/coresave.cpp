@@ -45,6 +45,7 @@ static uint32_t sv_size = 0;                    // this game's save RAM, bytes
 static uint16_t sv_blocks = 0;
 static const uint8_t *sv_blank = nullptr;       // start of a fresh image
 static uint32_t sv_blank_len = 0;
+static uint8_t sv_fill = 0;                     // the rest of a fresh image
 // beetle-pce-fast's BRAM_Init_String: a formatted, empty backup RAM.
 static const uint8_t HUBM[8] = { 'H', 'U', 'B', 'M', 0x00, 0x88, 0x10, 0x80 };
 
@@ -124,12 +125,12 @@ static bool sv_write_file(const uint8_t *img) {
     return true;
 }
 
-// A file shorter than the save RAM is read as far as it goes and zero-filled (MiSTer NES
+// A file shorter than the save RAM is read as far as it goes, the rest filled (MiSTer NES
 // writes 8 KB for carts that declare it). An empty or unreadable file does not count.
 static bool sv_read_file(const char *path, uint8_t *img) {
     FIL f; UINT br = 0;
     if (f_open(&f, path, FA_READ) != FR_OK) return false;
-    memset(img, 0, sv_size);
+    memset(img, sv_fill, sv_size);
     FRESULT r = f_read(&f, img, sv_size, &br);
     f_close(&f);
     return r == FR_OK && br > 0;
@@ -137,13 +138,13 @@ static bool sv_read_file(const char *path, uint8_t *img) {
 
 // ---- API ----
 void coresave_set_game(const char *fname, const char *subdir, uint32_t size,
-                       const uint8_t *blank, uint32_t blank_len) {
+                       const uint8_t *blank, uint32_t blank_len, uint8_t fill) {
     if (!sv_mutex) return;
     if (size > CORESAVE_MAX) size = CORESAVE_MAX;
     xSemaphoreTake(sv_mutex, portMAX_DELAY);
     sv_size = size & ~(uint32_t)(SV_BLK - 1);
     sv_blocks = sv_size / SV_BLK;
-    sv_blank = blank; sv_blank_len = blank_len;
+    sv_blank = blank; sv_blank_len = blank_len; sv_fill = fill;
     // Drive prefix from the path itself ("sd:" / "usb:"), else the mounted drive.
     const char *colon = strchr(fname, ':');
     char prefix[16] = "";
@@ -182,7 +183,7 @@ void coresave_restore(void) {
     if (sv_read_file(sv_path, sv_last)) src = "file";
     else if (sv_read_file(tmp, sv_last)) src = "file.tmp (recovered)";
     else {
-        memset(sv_last, 0, sv_size);
+        memset(sv_last, sv_fill, sv_size);
         if (sv_blank) memcpy(sv_last, sv_blank, sv_blank_len < sv_size ? sv_blank_len : sv_size);
         src = "blank image";
     }

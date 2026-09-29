@@ -11,6 +11,7 @@
 #include "tc_utils.h"
 #include "cores.h"
 #include "overlay.h"
+#include "coresave.h"
 
 int loadmd(const char *fname) {
     DEBUG("loadmd start\n");
@@ -52,6 +53,16 @@ int loadmd(const char *fname) {
     } while (br == 1024);
 
     DEBUG("loadmd: %d bytes\n", total);
+
+    // Cart SRAM: saves/md/<game>.sav, MiSTer Genesis's 64 KB layout (one byte per 68000
+    // word), 0xFF when there is no file, as MiSTer initialises it. Restored for every game
+    // while the core is still loading; a file is only written once the game writes SRAM
+    // (the core's 0x0B notice), so games without SRAM never get one.
+    if (r == FR_OK) {
+        coresave_set_game(fname, "md", 65536, nullptr, 0, 0xFF);
+        coresave_restore();
+    }
+
     overlay_status("Success");
     core_running = true;
 
