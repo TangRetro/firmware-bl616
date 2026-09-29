@@ -11,6 +11,7 @@
 #include "tc_utils.h"
 #include "cores.h"
 #include "overlay.h"
+#include "coresave.h"
 
 int loadsms(const char *fname) {
     DEBUG("loadsms start\n");
@@ -53,6 +54,15 @@ int loadsms(const char *fname) {
     } while (br == 1024);
 
     DEBUG("loadsms: %d bytes\n", total);
+
+    // Cart RAM: 32 KB, MiSTer SMS's .sav, saves/sms/<game>.sav. SMS headers carry no
+    // battery flag, so every game gets its RAM restored (zeros if no file), and a file is
+    // only written once the game actually writes cart RAM (the core's 0x0B notice).
+    if (r == FR_OK) {
+        coresave_set_game(fname, "sms", 32768, nullptr, 0);
+        coresave_restore();
+    }
+
     overlay_status("Success");
     core_running = true;
 
