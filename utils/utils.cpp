@@ -1,5 +1,58 @@
 #include "utils.h"
 
+#include "FreeRTOS.h"
+#include "task.h"
+#include "semphr.h"
+
+// UART1 is the FPGA link and several tasks write frames to it. A frame is only valid if
+// its bytes go out back to back (iosys counts `len` bytes after the 0xAA header), so
+// writers hold this token for a whole frame. It replaces taskENTER_CRITICAL(): with
+// interrupts off for a 1 KB ROM chunk (~5 ms at 2 Mbaud) the 32-byte RX FIFO overflows,
+// and a DMA transfer cannot sit inside a critical section at all. A DMA sender takes the
+// token and its completion interrupt gives it back, hence a binary semaphore, not a
+// mutex. Waits time out (500 ms) so a lost completion cannot silence every writer.
+static SemaphoreHandle_t fpga_tx_sem = NULL;
+volatile uint32_t fpga_tx_lock_timeouts = 0;
+
+void fpga_tx_lock_init(void)
+{
+    if (fpga_tx_sem == NULL) {
+        fpga_tx_sem = xSemaphoreCreateBinary();
+        if (fpga_tx_sem) xSemaphoreGive(fpga_tx_sem);
+    }
+}
+
+// Before the scheduler runs there is one thread and blocking is not allowed.
+static bool fpga_tx_lock_active(void)
+{
+    return fpga_tx_sem != NULL && xTaskGetSchedulerState() == taskSCHEDULER_RUNNING;
+}
+
+bool fpga_tx_lock_timed(uint32_t ms)
+{
+    if (!fpga_tx_lock_active()) return true;
+    if (xSemaphoreTake(fpga_tx_sem, pdMS_TO_TICKS(ms)) == pdTRUE) return true;
+    fpga_tx_lock_timeouts++;
+    return false;
+}
+
+void fpga_tx_lock(void)   { (void)fpga_tx_lock_timed(500); }
+
+void fpga_tx_unlock(void)
+{
+    if (!fpga_tx_lock_active()) return;
+    xSemaphoreGive(fpga_tx_sem);
+}
+
+// DMA transfer-complete callback only.
+void fpga_tx_unlock_from_isr(void)
+{
+    if (fpga_tx_sem == NULL) return;
+    BaseType_t woken = pdFALSE;
+    xSemaphoreGiveFromISR(fpga_tx_sem, &woken);
+    portYIELD_FROM_ISR(woken);
+}
+
 void fpga_tx_header(int cmd, int len) {
     bflb_uart_putchar(uart1_dev, 0xAA);
     bflb_uart_putchar(uart1_dev, len >> 8);
@@ -20,30 +73,30 @@ uint32_t get_file_size(const char *fname) {
 
 // Send a romdata packet to core of len bytes in `fbuf`
 void send_fbuf_data(uint16_t len) {
-    taskENTER_CRITICAL();
+    fpga_tx_lock();
     fpga_tx_header(0x07, len+1);
     for (int i = 0; i < len; i ++) {
         fpga_tx_byte(fbuf[i]);
     }
-    taskEXIT_CRITICAL();
+    fpga_tx_unlock();
 }
 
 // set loading state
 void set_loading_state(int state) {
-    taskENTER_CRITICAL();
+    fpga_tx_lock();
     fpga_tx_header(0x06, 2);
     fpga_tx_byte(state);        
-    taskEXIT_CRITICAL();
+    fpga_tx_unlock();
 }
 
 
 // bring FPGA to a good state by sending a few 0's
 void send_blank_packet(void) {
-    taskENTER_CRITICAL();
+    fpga_tx_lock();
     for (int i = 0; i < 8; i++) {
         fpga_tx_byte(0);
     }
-    taskEXIT_CRITICAL();
+    fpga_tx_unlock();
 }
 
 #include <string>
@@ -67,13 +120,13 @@ uint32_t get_core_config(void) {
 
 void set_core_config(uint32_t config) {
     core_config = config;
-    taskENTER_CRITICAL();
+    fpga_tx_lock();
     fpga_tx_header(0x03, 5);
     fpga_tx_byte(config >> 24);
     fpga_tx_byte(config >> 16);
     fpga_tx_byte(config >> 8);
     fpga_tx_byte(config);
-    taskEXIT_CRITICAL();
+    fpga_tx_unlock();
 }
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -107,7 +160,9 @@ int16_t get_core_id(void) {
     }
 
     // send command 1
+    fpga_tx_lock();
     fpga_tx_header(0x01, 1);
+    fpga_tx_unlock();
 
     // TODO: use a queue for better performance
     uint64_t start = bflb_mtimer_get_time_ms();

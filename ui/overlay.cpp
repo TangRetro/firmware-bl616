@@ -20,11 +20,11 @@ int overlay_on() {
 
 void overlay_cursor(int col, int row) {
     // uart1 command: 4 x[7:0] y[7:0]
-    taskENTER_CRITICAL();
+    fpga_tx_lock();
     fpga_tx_header(0x04, 3);
     fpga_tx_byte(col);
     fpga_tx_byte(row);
-    taskEXIT_CRITICAL();
+    fpga_tx_unlock();
 }
 
 // print to UART without the core displaying it. liveuart.py catches this.
@@ -35,13 +35,13 @@ void dprint(const char *fmt, ...) {
     vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
 
-    taskENTER_CRITICAL();
+    fpga_tx_lock();
     int len = strlen(buf);
     fpga_tx_header(0x0d, len+1);
     for(int i = 0; i < len; i++) {
         fpga_tx_byte(buf[i]);
     }
-    taskEXIT_CRITICAL();
+    fpga_tx_unlock();
 }
 
 void overlay_printf(const char *fmt, ...) {
@@ -51,13 +51,13 @@ void overlay_printf(const char *fmt, ...) {
     vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
 
-    taskENTER_CRITICAL();
+    fpga_tx_lock();
     int len = strlen(buf);
     fpga_tx_header(0x05, len+1);
     for(int i = 0; i < len; i++) {
         fpga_tx_byte(buf[i]);
     }
-    taskEXIT_CRITICAL();
+    fpga_tx_unlock();
 }
 
 void overlay_clear() {
@@ -77,13 +77,13 @@ void overlay_status(const char *fmt, ...) {
     buf[255] = '\0';
 
     overlay_cursor(1, 27);
-    taskENTER_CRITICAL();
+    fpga_tx_lock();
     int len = strlen(buf);
     fpga_tx_header(0x05, len+1);
     for(int i = 0; i < len; i++) {
         fpga_tx_byte(buf[i]);
     }
-    taskEXIT_CRITICAL();
+    fpga_tx_unlock();
 }
 
 // show a pop-up message, press any key to discard (caller needs to redraw screen)
@@ -154,10 +154,10 @@ void overlay_message(const char *msg, int center) {
 
 // turn overlay on/off
 void overlay(int state) {
-    taskENTER_CRITICAL();
+    fpga_tx_lock();
     _overlay_on = state;
     fpga_tx_header(0x08, 2);
     fpga_tx_byte(state);        
-    taskEXIT_CRITICAL();
+    fpga_tx_unlock();
 }
 

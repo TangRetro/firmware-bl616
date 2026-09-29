@@ -140,4 +140,12 @@ extern int16_t get_core_id(void);
 extern uint32_t get_core_config(void);
 extern void set_core_config(uint32_t config);
 
+// UART1 (FPGA link) ownership, one frame at a time. See utils.cpp.
+extern void fpga_tx_lock_init(void);
+extern void fpga_tx_lock(void);
+extern bool fpga_tx_lock_timed(uint32_t ms);
+extern void fpga_tx_unlock(void);
+extern void fpga_tx_unlock_from_isr(void);
+extern volatile uint32_t fpga_tx_lock_timeouts;
+
 extern const char *cstr_find_ignore_case(const char *str, const char *substr);

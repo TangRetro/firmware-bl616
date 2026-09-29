@@ -12,13 +12,13 @@ std::string floppy_fname[2];
 USB_NOCACHE_RAM_SECTION FIL f_floppy[2];
 
 static void IOWR(uint16_t addr, uint16_t data) {
-    taskENTER_CRITICAL();
+    fpga_tx_lock();
     fpga_tx_header(0x0b, 5);
     fpga_tx_byte(addr >> 8);
     fpga_tx_byte(addr & 0xff);
     fpga_tx_byte(data >> 8);
     fpga_tx_byte(data & 0xff);
-    taskEXIT_CRITICAL();
+    fpga_tx_unlock();
 }
 
 // open floppy image and set parameters to core

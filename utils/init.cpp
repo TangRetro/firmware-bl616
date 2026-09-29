@@ -80,6 +80,7 @@ void init_gpio_and_uart() {
         struct bflb_device_s *uart0 = bflb_device_get_by_name("uart0");
         if (uart0) bflb_uart_set_console(uart0);
     }
+    fpga_tx_lock_init();
 
     // set JTAG pins to high-Z
     // interrupts masked, SWGPIO mode, output off, input off, schmitt ON

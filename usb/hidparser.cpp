@@ -492,12 +492,12 @@ bool parse_report_descriptor(const uint8_t *rep, uint16_t rep_size, hid_report_t
 }
 
 void kbd_tx(const ps2_scancode_t scancode) {
-	taskENTER_CRITICAL();
+	fpga_tx_lock();
 	fpga_tx_header(0x0c, scancode.len+1);
 	for (int i = 0; i < scancode.len; i++) {
 		fpga_tx_byte(scancode.code[i]);
 	}
-	taskEXIT_CRITICAL();
+	fpga_tx_unlock();
 }
 
 uint8_t usb_to_ascii(uint8_t code, uint8_t modifier) {

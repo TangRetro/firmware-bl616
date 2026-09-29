@@ -77,8 +77,10 @@ const char *BOARD_NAME = "unknown";
 
 // Override system printf() to send to FPGA
 int __attribute__((weak)) putchar(int ch) {
+    fpga_tx_lock();
     fpga_tx_header(0x05, 2);
     fpga_tx_byte(ch);
+    fpga_tx_unlock();
     return ch;
 }
 
@@ -199,11 +201,13 @@ static void send_hid_to_core(void) {
         uint16_t joy1=0, joy2=0, hid1=0, hid2=0;    
         get_joypad_states(&joy1, &joy2, &hid1, &hid2);
         if (first || hid1 != hid1_old || hid2 != hid2_old) {    // send HID if changed
+            fpga_tx_lock();
             fpga_tx_header(0x09, 5);
             fpga_tx_byte(hid1 >> 8);
             fpga_tx_byte(hid1 & 0xff);
             fpga_tx_byte(hid2 >> 8);
             fpga_tx_byte(hid2 & 0xff);
+            fpga_tx_unlock();
             hid1_old = hid1;
             hid2_old = hid2;
             first = false;
