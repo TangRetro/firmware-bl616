@@ -11,6 +11,17 @@
 #include "tc_utils.h"
 #include "cores.h"
 #include "overlay.h"
+#include "coresave.h"
+
+// Cartridge types (header byte $D6) whose RAM has a battery: low nibble 2 (ROM+RAM+battery),
+// 5 (+coprocessor), 6 (coprocessor+battery), 9 (+RTC), A (SuperFX / SA-1 +battery).
+static bool snes_has_battery(int rom_type) {
+    switch (rom_type & 0x0f) {
+    case 0x2: case 0x5: case 0x6: case 0x9: case 0xa: return true;
+    default: return false;
+    }
+}
+
 // return 0 if snes header is successfully parsed at off
 // typ 0: LoROM, 1: HiROM, 2: ExHiROM
 int parse_snes_header(FIL *fp, int pos, int file_size, int typ, unsigned char *hdr,
@@ -61,7 +72,6 @@ int parse_snes_header(FIL *fp, int pos, int file_size, int typ, unsigned char *h
     return 1;
 }
 
-// TODO: implement bsram backup
 // return 0 if successful
 int loadsnes(const char *fname) {
     int r = 1;
@@ -132,6 +142,21 @@ int loadsnes(const char *fname) {
             overlay_printf(" ROM=%d RAM=%d                 ", 1 << rom_size, ram_size ? (1 << ram_size) : 0);
         }
     } while (br == 1024);
+
+    // Battery RAM: saves/snes/<game>.sav, the header's RAM size (1 KB << n, MiSTer's size),
+    // restored while the core is still loading. A bitstream without the save-RAM channel
+    // ignores it and never asks for a save.
+    // Above CORESAVE_MAX (a handful of 64/128 KB carts) nothing is saved rather than half.
+    {
+        uint32_t sv_size = ram_size > 0 ? 1024u << (ram_size > 7 ? 7 : ram_size) : 0;
+        if (r == FR_OK && sv_size && sv_size <= CORESAVE_MAX && snes_has_battery(rom_type_header)) {
+            coresave_set_game(fname, "snes", sv_size, nullptr, 0);
+            coresave_restore();
+        } else {
+            if (sv_size > CORESAVE_MAX) DEBUG("loadsnes: %u KB save RAM, not saved\n", (unsigned)(sv_size >> 10));
+            coresave_no_game();
+        }
+    }
 
     overlay_status("Success");
     core_running = true;
