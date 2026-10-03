@@ -273,7 +273,7 @@ static int menu_loadrom(const char *dir) {
     if (fname.find(string(drv) + "cores") == 0) {
         overlay_status("Core: %s", fname.c_str());
         fpga_program(fname.c_str());
-        fpga_link_baud_for(fname.c_str());
+        // BISECT: fpga_link_baud_for(fname.c_str());
         _overlay_on = 1;                // turn on overlay after core is loaded
         return 0;       // return to main menu
     } 
@@ -334,7 +334,7 @@ static int menu_loadrom(const char *dir) {
                     file_log(buf);
                 }
                 bool prog_ok = fpga_program(fname_core.c_str());
-                fpga_link_baud_for(fname_core.c_str());
+                // BISECT: fpga_link_baud_for(fname_core.c_str());
                 overlay_cursor(0, 11);
                 overlay_printf("DBG fpga_program=%d          ", prog_ok ? 1 : 0);
                 {
@@ -915,7 +915,7 @@ static void main_task(void *pvParameters)
     if (find_core_for_board(fname, "monitor.bin")) {
         uart_dbg("BOOT: monitor.bin found, calling fpga_program");
         bool ok = fpga_program(fname.c_str());
-        fpga_link_baud_for(fname.c_str());
+        // BISECT: fpga_link_baud_for(fname.c_str());
         uart_dbg(ok ? "BOOT: fpga_program returned OK" : "BOOT: fpga_program returned FAIL");
     } else {
         overlay_status("No monitor.bin found for board.");
