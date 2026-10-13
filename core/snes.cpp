@@ -7,10 +7,53 @@
 
 #define _GNU_SOURCE
 #include <string.h>      // for strcasestr
+#include <string>
 
 #include "tc_utils.h"
 #include "cores.h"
 #include "overlay.h"
+// DSP chip ROMs (bios/dsp1b.rom ...), the 8 KB files other emulators use. The core keeps
+// only the chip the cartridge needs and gets it at game load. Same detection as the
+// core's smc_parser.v.
+static const char *snes_chip_rom(int mc, int typ, int company) {
+    if (mc == 0x30 && typ == 5 && company == 0xB2) return "dsp3.rom";
+    if (((mc == 0x20 || mc == 0x21) && typ == 3) || (mc == 0x30 && typ == 5) ||
+        (mc == 0x31 && (typ == 3 || typ == 5)))   return "dsp1b.rom";
+    if (mc == 0x20 && typ == 5)                   return "dsp2.rom";
+    if (mc == 0x30 && typ == 3)                   return "dsp4.rom";
+    return NULL;
+}
+
+static FIL fchip;
+
+// Send the chip ROM with the core in loading state 3 (SNES held in reset, bytes go to the
+// DSP). Returns 0 when sent; a missing file is reported and the game loads anyway.
+static int snes_send_chip_rom(const char *name) {
+    std::string path(drv);
+    path.append("bios/");
+    path.append(name);
+    FILINFO fno;
+    if (f_stat(path.c_str(), &fno) != FR_OK || fno.fsize != 8192) {
+        overlay_status("Needs bios/%s (8 KB)", name);
+        delay(1500);
+        return 1;
+    }
+    if (f_open(&fchip, path.c_str(), FA_READ) != FR_OK) {
+        overlay_status("Cannot open bios/%s", name);
+        delay(1500);
+        return 1;
+    }
+    set_loading_state(3);
+    unsigned int br;
+    do {
+        if (f_read(&fchip, fbuf, 1024, &br) != FR_OK || br == 0) break;
+        send_fbuf_data(br);
+    } while (br == 1024);
+    f_close(&fchip);
+    set_loading_state(1);
+    return 0;
+}
+
 // return 0 if snes header is successfully parsed at off
 // typ 0: LoROM, 1: HiROM, 2: ExHiROM
 int parse_snes_header(FIL *fp, int pos, int file_size, int typ, unsigned char *hdr,
@@ -132,6 +175,11 @@ int loadsnes(const char *fname) {
             overlay_printf(" ROM=%d RAM=%d                 ", 1 << rom_size, ram_size ? (1 << ram_size) : 0);
         }
     } while (br == 1024);
+
+    {
+        const char *chip = snes_chip_rom(map_ctrl, rom_type_header, company);
+        if (chip) snes_send_chip_rom(chip);
+    }
 
     overlay_status("Success");
     core_running = true;
